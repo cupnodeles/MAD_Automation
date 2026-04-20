@@ -154,78 +154,49 @@ if uploaded_file:
 
     st.divider()
 
+    # --- 1. DATA PREPARATION & CLEANING ---
     file_ext = uploaded_file.name.split('.')[-1]
-    
     with st.spinner(" Reading data..."):
         try:
             if file_ext == 'csv':
                 df = pd.read_csv(uploaded_file)
             else:
                 df = pd.read_excel(uploaded_file, engine='openpyxl')
-            
             df.columns = df.columns.str.strip()
-            
         except Exception as e:
             st.error(f"Error loading file: {e}")
             st.stop()
 
     if "Status" in df.columns and "Remark By" in df.columns:
         with st.spinner(" Scrubbing data..."):
-            # Truncate Remark to 250 characters (same as dailyprod.py)
             if 'Remark' in df.columns:
                 df['Remark'] = df['Remark'].astype(str).str[:250]
-
-            # Filtering Status: remove rows where Status starts with any excluded status
             mask_status = df['Status'].astype(str).str.startswith(tuple(EXCLUDED_STATUSES))
-
-            # Format Date column
             if 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date'], errors='coerce').dt.strftime('%m/%d/%Y')
-
-            # Filtering Remark By: remove rows matching specific remark sources
             mask_remark = df['Remark By'].astype(str).str.contains('SMGONZALES|CMENRIQUEZ', na=False)
-            
             df_removed = df[mask_status | mask_remark]
             df_cleaned = df[~(mask_status | mask_remark)].copy()
-            
-            # Check if we lost too many rows
             if len(df_cleaned) < 100 and len(df) > 1000:
                 st.warning(f" Only {len(df_cleaned)} rows remaining after filtering out of {len(df)}. Check filter criteria.")
-
-            # --- RFD / SUB-RFD Classification ---
             if "Remark" in df_cleaned.columns:
                 classifications = df_cleaned['Remark'].apply(classify_remark)
                 df_cleaned["RFD"], df_cleaned["SUB-RFD"] = zip(*classifications)
                 df_cleaned["RFD"] = df_cleaned["RFD"].fillna("UNCATEGORIZED")
                 df_cleaned["SUB-RFD"] = df_cleaned["SUB-RFD"].fillna("UNCATEGORIZED")
-                
-            # --- Account Number formatting (add 6 zeroes and force as text) ---
             if "Account No." in df_cleaned.columns:
                 df_cleaned["Account No."] = df_cleaned["Account No."].astype(str).str.replace(r'\.0$', '', regex=True)
-                df_cleaned["Account No."] = df_cleaned["Account No."].replace('nan', '')
-                df_cleaned["Account No."] = df_cleaned["Account No."].replace('None', '')
-                
-                # Ensure we drop any trailing empty/nan rows from ruining the dataset before pasting
+                df_cleaned["Account No."] = df_cleaned["Account No."].replace(['nan', 'None'], '')
                 df_cleaned = df_cleaned[df_cleaned["Account No."] != ""]
-                
-                # Prefix with single quote to force win32com to paste it as a text string with zeroes
                 df_cleaned["Account No."] = "'000000" + df_cleaned["Account No."]
-                
-            # --- Time formatting (force as text with AM/PM to bypass Excel fractional floats) ---
             if "Time" in df_cleaned.columns:
-                # Convert to standard formatted string and prefix with single quote
                 def format_time(t):
                     try:
-                        # Convert to datetime to standardize, then output as 12-hour AM/PM string
                         t_str = pd.to_datetime(str(t), errors='coerce').strftime('%I:%M %p')
-                        if pd.isna(t_str) or t_str == 'NaT':
-                            return str(t) # Fallback to original
-                        return f"'{t_str}" # Prefix quote forces Excel to store exactly "hh:mm AM" as text
-                    except Exception:
-                        return str(t)
+                        if pd.isna(t_str) or t_str == 'NaT': return str(t)
+                        return f"'{t_str}"
+                    except Exception: return str(t)
                 df_cleaned["Time"] = df_cleaned["Time"].apply(format_time)
-            
-            # Prepare data identically to what will be pasted into the template (S.No to SUB-RFD)
             if 'S.No' in df_cleaned.columns and 'SUB-RFD' in df_cleaned.columns:
                 start_idx = df_cleaned.columns.get_loc('S.No')
                 end_idx = df_cleaned.columns.get_loc('SUB-RFD') + 1
@@ -233,37 +204,46 @@ if uploaded_file:
             else:
                 df_extracted_display = df_cleaned.iloc[:, :53]
 
-        # Top-level metrics
+        # --- 2. EXTRACTION TRIGGER (MOVED UP) ---
+        template_path = r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm"
+        tmpl_ext = os.path.splitext(template_path)[1] or ".xlsx"
+        report_date_obj, date_str = get_report_date()
+        final_filename = f"Cleaned_Daily_Prod{tmpl_ext}"
+        full_save_path = os.path.join(SAVE_PATH, final_filename)
+        
+        buckets_to_process = [120, 150, 180]
+        internal_master_name = f"Master_Calculation_{date_str}Test{tmpl_ext}"
+        tmp_master = os.path.join(SAVE_PATH, internal_master_name)
+
+        with st.spinner("Running Master calculation and generating bucket files..."):
+            with st.expander("Extraction Log (expand to view)", expanded=False):
+                log_container = st.container()
+                with log_container:
+                    success = process_template(df_cleaned, template_path, tmp_master, replacement_name, password="MAD_2Q2026")
+                    if success:
+                        st.success(f"Master created: {tmp_master}")
+                        process_campaign_split(tmp_master, template_path, SAVE_PATH, date_str, buckets_to_process, password="MAD_2Q2026")
+                    else:
+                        st.error("Master calculation failed. Aborting bucket generation.")
+
+        st.divider()
+
+        # --- 3. METRICS & PREVIEWS ---
         c1, c2, c3 = st.columns(3)
         c1.metric("Original Rows", f"{len(df):,}")
         c2.metric("Kept Rows", f"{len(df_cleaned):,}")
         c3.metric("Removed Rows", f"{len(df_removed):,}", delta=f"-{len(df_removed)}", delta_color="inverse")
-
+        
         st.divider()
-
-        # Removed Rows Log
         st.subheader(" Removed Rows")
-        st.markdown(f"**{len(df_removed)} rows** were filtered out based on their Status and Remarks.")
+        st.markdown(f"**{len(df_removed)} rows** were filtered out.")
         if len(df_removed) > 0:
             st.dataframe(df_removed.head(100), use_container_width=True)
         
         st.divider()
-
-        # Preview of what gets pasted
         st.subheader(" Template Paste Preview")
-        st.markdown(f"A preview of the **{df_extracted_display.shape[1]} columns** that will be pasted into the template.")
         st.dataframe(df_extracted_display.head(50), use_container_width=True)
-        
-        st.divider()
 
-        st.subheader(" Export Options")
-        
-        template_path = st.text_input("Template File Path:", value=r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm")
-        
-        # Preserve the template's file extension since we copy it byte-for-byte
-        tmpl_ext = os.path.splitext(template_path)[1] or ".xlsx"
-        final_filename = f"Cleaned_Daily_Prod{tmpl_ext}"
-        full_save_path = os.path.join(SAVE_PATH, final_filename)
 
         
         def process_template(df_data, tmpl_path, output_path, replacement_collector=None, password=None, is_bucket_mode=False, start_row=3, return_buckets=False):
@@ -964,25 +944,6 @@ if uploaded_file:
                 return False
 
 
-        # After choosing replacement name, run the extraction immediately
-        st.divider()
-        report_date_obj, date_str = get_report_date()
-        buckets_to_process = [120, 150, 180]
-        tmpl_ext = os.path.splitext(template_path)[1] or ".xlsm"
-        internal_master_name = f"Master_Calculation_{date_str}Test{tmpl_ext}"
-        tmp_master = os.path.join(SAVE_PATH, internal_master_name)
-
-        # Run processing while capturing all Streamlit outputs inside an expander
-        with st.spinner("Running Master calculation and generating bucket files..."):
-            with st.expander("Extraction Log (expand to view)", expanded=False):
-                log_container = st.container()
-                with log_container:
-                    success = process_template(df_cleaned, template_path, tmp_master, replacement_name, password="MAD_2Q2026")
-                    if success:
-                        st.success(f"Master created: {tmp_master}")
-                        process_campaign_split(tmp_master, template_path, SAVE_PATH, date_str, buckets_to_process, password="MAD_2Q2026")
-                    else:
-                        st.error("Master calculation failed. Aborting bucket generation.")
     else:
         st.error(" Columns 'Status' and 'Remark By' not found.")
         st.write(f"Available columns: {list(df.columns)}")
