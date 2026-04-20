@@ -1,8 +1,17 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
 st.set_page_config(page_title="Collection Efforts Clean", layout="wide")
+
+# Apply consistent premium design
+set_premium_style()
+
 
 # PAGE_MAP and rfd_mapping remain unchanged
 PAGE_MAP = {
@@ -85,7 +94,7 @@ def classify_remark(remark):
     return None, None
 
 def main():
-    st.title("📊 Collection Efforts Cleaner & RFD Remark Classifier")
+    st.title(" Collection Efforts Cleaner & RFD Remark Classifier")
     st.markdown("Upload a file to clean and classify remarks into RFD/SUB-RFD categories.")
     
     uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"])
@@ -186,7 +195,7 @@ def main():
             col2.metric("Classified", len(df_cleaned[df_cleaned["RFD"] != "UNCATEGORIZED"]))
             col3.metric("Uncategorized", len(df_cleaned[df_cleaned["RFD"] == "UNCATEGORIZED"]))
 
-            tab1, tab2 = st.tabs(["📈 Classification Stats", "📄 Data Preview"])
+            tab1, tab2 = st.tabs([" Classification Stats", " Data Preview"])
             
             with tab1:
                 c1, c2 = st.columns(2)
@@ -208,7 +217,7 @@ def main():
 
             st.sidebar.header("Actions")
             st.sidebar.download_button(
-                label="📥 Download Processed File",
+                label=" Download Processed File",
                 data=output,
                 file_name=f"CE_Clean_{pd.Timestamp.now().strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

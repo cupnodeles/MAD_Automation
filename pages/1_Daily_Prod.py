@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 import io
@@ -7,7 +12,11 @@ import tempfile
 from datetime import datetime, timedelta
 
 # Set page configuration
-st.set_page_config(page_title="Daily Prod Automation", page_icon="⚡", layout="wide")
+st.set_page_config(page_title="Daily Prod Automation", page_icon=None, layout="wide")
+
+# Apply consistent premium design
+set_premium_style()
+
 
 # Check for win32com availability
 try:
@@ -16,7 +25,7 @@ try:
     WIN32COM_AVAILABLE = True
 except ImportError:
     WIN32COM_AVAILABLE = False
-    st.warning("⚠️ pywin32 is not installed. Excel COM automation will not work. Install with: pip install pywin32")
+    st.warning(" pywin32 is not installed. Excel COM automation will not work. Install with: pip install pywin32")
 
 # --- DATE HELPER FOR FILENAMES ---
 def get_report_date():
@@ -29,7 +38,7 @@ def get_report_date():
     return report_date, report_date.strftime("%Y%m%d")
 
 # --- FILE PATH CONFIGURATION ---
-SAVE_PATH = r"C:\Users\SPM\Downloads\BPI\PL_Daily\DRR Auto"
+SAVE_PATH = r"C:\Users\SPM\Downloads\BPI\PL_Daily\APRIL"
 
 # Create folder if it doesn't exist
 if not os.path.exists(SAVE_PATH):
@@ -47,6 +56,9 @@ EXCLUDED_STATUSES = [
     'SMS RECEIVED - NO SUCH PERSON (NSP)',
     'SERVICE REQUEST (SR) - FOR COLLECTION'
 ]
+
+# NAMES TO BE REPLACED (Add new names to this list)
+NAMES_TO_REPLACE = ["Mendoza, Joshua",]
 
 rfd_mapping = {
     "AWAITING_FUNDS": [
@@ -122,18 +134,18 @@ st.title("Daily Prod Automation")
 st.markdown("Removes unwanted statuses and remark sources for cleaner data processing")
 
 # FILE UPLOAD
-uploaded_file = st.file_uploader("📂 Drag and drop your file (Excel or CSV)", type=["xlsx", "xls", "csv"])
+uploaded_file = st.file_uploader(" Drag and drop your file (Excel or CSV)", type=["xlsx", "xls", "csv"])
 
 if uploaded_file:
     # --- COLLECTOR SETTINGS (SHOWN AFTER UPLOAD) ---
-    st.subheader("👤 Collector Settings")
+    st.subheader(" Collector Settings")
     replacement_name = st.selectbox(
-        "Choose replacement name for 'Mendoza, Joshua':",
+        "Choose replacement name for Target Collectors (NEW):",
         ["Select Name...", "Keep Original", "Bandola, Diana", "Reyes, Berlyn", "Galang, Jayson", "Antonio, Christine"]
     )
 
     if replacement_name == "Select Name...":
-        st.info("💡 Please select a replacement name (or **'Keep Original'**) to proceed with the automation.")
+        st.info(" Please select a replacement name (or **'Keep Original'**) to proceed with the automation.")
         st.stop()
 
     # Set replacement_name to None if "Keep Original" is selected
@@ -144,7 +156,7 @@ if uploaded_file:
 
     file_ext = uploaded_file.name.split('.')[-1]
     
-    with st.spinner("🚀 Reading data..."):
+    with st.spinner(" Reading data..."):
         try:
             if file_ext == 'csv':
                 df = pd.read_csv(uploaded_file)
@@ -158,7 +170,7 @@ if uploaded_file:
             st.stop()
 
     if "Status" in df.columns and "Remark By" in df.columns:
-        with st.spinner("🧼 Scrubbing data..."):
+        with st.spinner(" Scrubbing data..."):
             # Truncate Remark to 250 characters (same as dailyprod.py)
             if 'Remark' in df.columns:
                 df['Remark'] = df['Remark'].astype(str).str[:250]
@@ -178,7 +190,7 @@ if uploaded_file:
             
             # Check if we lost too many rows
             if len(df_cleaned) < 100 and len(df) > 1000:
-                st.warning(f"⚠️ Only {len(df_cleaned)} rows remaining after filtering out of {len(df)}. Check filter criteria.")
+                st.warning(f" Only {len(df_cleaned)} rows remaining after filtering out of {len(df)}. Check filter criteria.")
 
             # --- RFD / SUB-RFD Classification ---
             if "Remark" in df_cleaned.columns:
@@ -230,7 +242,7 @@ if uploaded_file:
         st.divider()
 
         # Removed Rows Log
-        st.subheader("🗑️ Removed Rows")
+        st.subheader(" Removed Rows")
         st.markdown(f"**{len(df_removed)} rows** were filtered out based on their Status and Remarks.")
         if len(df_removed) > 0:
             st.dataframe(df_removed.head(100), use_container_width=True)
@@ -238,13 +250,13 @@ if uploaded_file:
         st.divider()
 
         # Preview of what gets pasted
-        st.subheader("📄 Template Paste Preview")
+        st.subheader(" Template Paste Preview")
         st.markdown(f"A preview of the **{df_extracted_display.shape[1]} columns** that will be pasted into the template.")
         st.dataframe(df_extracted_display.head(50), use_container_width=True)
         
         st.divider()
 
-        st.subheader("💾 Export Options")
+        st.subheader(" Export Options")
         
         template_path = st.text_input("Template File Path:", value=r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm")
         
@@ -662,11 +674,11 @@ if uploaded_file:
                                             update_count = 0
                                             for i, row_val in enumerate(vals):
                                                 val = str(row_val[0]).strip()
-                                                if "Mendoza, Joshua" in val:
+                                                if any(name in val for name in NAMES_TO_REPLACE):
                                                     ws.Cells(3 + i, 66).Value = replacement_collector
                                                     update_count += 1
                                             if update_count > 0:
-                                                st.write(f"Replaced 'Mendoza, Joshua' with '{replacement_collector}' in {update_count} rows")
+                                                st.write(f"Replaced {update_count} rows with '{replacement_collector}'")
                                 except Exception as e:
                                     st.warning(f"Step 10 error: {e}")
 
@@ -740,7 +752,7 @@ if uploaded_file:
                         if return_buckets:
                             return True, calc_dict
                         
-                        st.success(f"✅ Successfully processed {num_rows} rows into template")
+                        st.success(f" Successfully processed {num_rows} rows into template")
                         # Store in session state for reuse by the splitting tool
                         st.session_state['last_master_path'] = output_path
                         return True
@@ -845,31 +857,24 @@ if uploaded_file:
                     campaign_tmpl = fr"C:\Users\SPM\Downloads\BPI\Template\PL_2026{{Month}}{{Day}}_{{Campaign}}_Madrid.xlsx"
                     
                     if not os.path.exists(campaign_tmpl):
-                        st.error(f"❌ Campaign template not found: {os.path.basename(campaign_tmpl)}")
+                        st.error(f" Campaign template not found: {os.path.basename(campaign_tmpl)}")
                         continue
 
-                    bucket_filename = f"PL_{date_str}_{b}_Madrid.xlsx"
+                    bucket_filename = f"PL_{date_str}_{b}_MadridTest.xlsx"
                     save_path = os.path.abspath(os.path.join(save_dir, bucket_filename))
-                    local_xls_path = save_path.replace(".xlsx", ".xls")
-                    
+
                     try:
                         st.write(f"Processing bucket {b}...")
-                        shutil.copy2(campaign_tmpl, local_xls_path)
-                        
-                        # Re-ensure prompt suppression right before opening the bucket report
+                        # Open the original (unprotected) template read-only, paste data, then SaveAs encrypted copy.
                         excel.DisplayAlerts = False
                         excel.Interactive = False
-                        
-                        # Open the local copy with full suppression parameters
                         wb_bucket = excel.Workbooks.Open(
-                            Filename=local_xls_path, 
-                            UpdateLinks=0, 
-                            ReadOnly=False,
-                            Password=password, 
-                            WriteResPassword=password,
+                            Filename=campaign_tmpl,
+                            UpdateLinks=0,
+                            ReadOnly=True,
                             IgnoreReadOnlyRecommended=True
                         )
-                        
+
                         # Try to get the sheet, fallback to first sheet if named differently
                         try:
                             ws_bucket = wb_bucket.Sheets("VOLARE EXTRACTION")
@@ -933,21 +938,18 @@ if uploaded_file:
                             st.warning(f"Formatting warning: {fmt_err}")
                         
                         # Save specifically in modern OpenXML (.xlsx) format (FileFormat=51)
-                        # Re-encrypt with the same password as requested
+                        # Encrypt the output with the same password supplied to the function
                         wb_bucket.SaveAs(save_path, FileFormat=51, Password=password)
                         wb_bucket.Close()
-                        st.success(f"✅ Generated: {bucket_filename}")
+                        st.success(f" Generated: {bucket_filename}")
                         
                     except Exception as bucket_err:
-                        st.error(f"❌ Error processing bucket {b}: {bucket_err}")
+                        st.error(f" Error processing bucket {b}: {bucket_err}")
                         import traceback
                         st.code(traceback.format_exc())
                     finally:
-                        if os.path.exists(local_xls_path):
-                            try:
-                                os.remove(local_xls_path)
-                            except:
-                                pass
+                        # No temporary copies to clean up when opening template directly
+                        pass
                 
                 # Restore Interactive mode before quitting
                 excel.Interactive = True
@@ -962,106 +964,27 @@ if uploaded_file:
                 return False
 
 
+        # After choosing replacement name, run the extraction immediately
         st.divider()
-        st.subheader("📤 Export Settings")
-        output_choice = st.radio(
-            "Select Output Type:",
-            ["Master Report Only", "Triple Bucket Reports Only", "Both"],
-            index=2, # Default to Both
-            horizontal=True
-        )
-        
-        st.divider()
+        report_date_obj, date_str = get_report_date()
+        buckets_to_process = [120, 150, 180]
+        tmpl_ext = os.path.splitext(template_path)[1] or ".xlsm"
+        internal_master_name = f"Master_Calculation_{date_str}Test{tmpl_ext}"
+        tmp_master = os.path.join(SAVE_PATH, internal_master_name)
 
-        if output_choice in ["Master Report Only", "Both"]:
-            st.subheader("📋 Master Report")
-            col_export_1, col_export_2 = st.columns(2)
-            
-            with col_export_1:
-                if st.button("💾 SAVE TO DRR AUTO FOLDER", width='stretch'):
-                    if not os.path.exists(template_path):
-                        st.error("Template file not found! Please check the path.")
-                    elif not WIN32COM_AVAILABLE:
-                        st.error("pywin32 is not installed. Cannot save to Excel template.")
+        # Run processing while capturing all Streamlit outputs inside an expander
+        with st.spinner("Running Master calculation and generating bucket files..."):
+            with st.expander("Extraction Log (expand to view)", expanded=False):
+                log_container = st.container()
+                with log_container:
+                    success = process_template(df_cleaned, template_path, tmp_master, replacement_name, password="MAD_2Q2026")
+                    if success:
+                        st.success(f"Master created: {tmp_master}")
+                        process_campaign_split(tmp_master, template_path, SAVE_PATH, date_str, buckets_to_process, password="MAD_2Q2026")
                     else:
-                        try:
-                            with st.spinner(f"Writing {len(df_cleaned)} rows to template..."):
-                                success = process_template(df_cleaned, template_path, full_save_path, replacement_name, password="MAD_2Q2026")
-                                if success:
-                                    st.success(f"Successfully saved to:\n{full_save_path}")
-                        except Exception as e:
-                            st.error(f"Could not save to local path: {e}")
-
-            with col_export_2:
-                if os.path.exists(template_path) and WIN32COM_AVAILABLE:
-                    try:
-                        # Save to a temp file first, then read back for download
-                        if st.button("📥 DOWNLOAD MASTER REPORT", width='stretch'):
-                            with st.spinner("Preparing download..."):
-                                tmp_file = os.path.join(tempfile.gettempdir(), final_filename)
-                                success = process_template(df_cleaned, template_path, tmp_file, replacement_name, password="MAD_2Q2026")
-                                if success:
-                                    with open(tmp_file, "rb") as f:
-                                        file_bytes = f.read()
-                                    # Clean up temp file
-                                    try:
-                                        os.remove(tmp_file)
-                                    except Exception:
-                                        pass
-                                    
-                                    mime_type = "application/vnd.ms-excel.sheet.macroEnabled.12" if final_filename.endswith('.xlsm') else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                                    
-                                    st.download_button(
-                                        label="Confirm Download",
-                                        data=file_bytes,
-                                        file_name=final_filename,
-                                        mime=mime_type,
-                                        width='stretch'
-                                    )
-                    except Exception as e:
-                        st.error(f"Error preparing download: {e}")
-                        import traceback
-                        st.code(traceback.format_exc())
-                elif not WIN32COM_AVAILABLE:
-                    st.warning("pywin32 is required for Excel export. Install with: pip install pywin32")
-                else:
-                    st.error("Template not found!")
-
-        if output_choice in ["Triple Bucket Reports Only", "Both"]:
-            if output_choice == "Both":
-                st.divider()
-            st.subheader("🚀 Triple Bucket Export")
-            st.markdown("Generates 3 separate files for **120, 150, and 180 Days** buckets based on specialized templates.")
-            
-            if st.button("🔥 GENERATE 120/150/180 BUCKET REPORTS", width='stretch'):
-                report_date_obj, date_str = get_report_date()
-                buckets_to_process = [120, 150, 180]
-                
-                # Smart Source Selection
-                master_source = None
-                if 'last_master_path' in st.session_state and os.path.exists(st.session_state['last_master_path']):
-                    master_source = st.session_state['last_master_path']
-                    st.info(f"Reusing already processed Master file: {os.path.basename(master_source)}")
-                else:
-                    with st.spinner("No active Master found. Running background calculation pass... (Saved in DRR Auto folder)"):
-                        tmpl_ext = os.path.splitext(template_path)[1] or ".xlsm"
-                        # Generate a descriptive internal master name in the local folder
-                        internal_master_name = f"Master_Calculation_{date_str}{tmpl_ext}"
-                        tmp_master = os.path.join(SAVE_PATH, internal_master_name)
-                        
-                        success = process_template(df_cleaned, template_path, tmp_master, replacement_name, password="MAD_2Q2026")
-                        if success:
-                            master_source = tmp_master
-                        else:
-                            st.error("Background calculation failed.")
-                
-                if master_source:
-                    with st.spinner("Splitting Master into campaign buckets..."):
-                        process_campaign_split(master_source, template_path, SAVE_PATH, date_str, buckets_to_process, password="MAD_2Q2026")
-            else:
-                st.warning("Template file is required for downloading.")
+                        st.error("Master calculation failed. Aborting bucket generation.")
     else:
-        st.error("⚠️ Columns 'Status' and 'Remark By' not found.")
+        st.error(" Columns 'Status' and 'Remark By' not found.")
         st.write(f"Available columns: {list(df.columns)}")
 
 else:

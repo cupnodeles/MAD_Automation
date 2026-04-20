@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -11,11 +16,15 @@ except ImportError:
 
 st.set_page_config(page_title="FINNONE AUTOMATION", layout="wide")
 
+# Apply consistent premium design
+set_premium_style()
+
+
 FINNONE_PASSWORD = "MAD_2Q2026"
 
 def decrypt_excel(uploaded_file, password):
     if not HAS_MSOFFCRYPTO:
-        st.error("⚠️ The 'msoffcrypto-tool' library is required to automatically unlock password-protected Excel files. Please open your terminal and run:")
+        st.error(" The 'msoffcrypto-tool' library is required to automatically unlock password-protected Excel files. Please open your terminal and run:")
         st.code("pip install msoffcrypto-tool")
         return uploaded_file
         
@@ -32,7 +41,7 @@ def decrypt_excel(uploaded_file, password):
         return uploaded_file
 
 def main():
-    st.title("📊 FINNONE Automation")
+    st.title(" FINNONE Automation")
     st.markdown("Upload your FINNONE file to extract and process data according to the action code rules.")
     
     uploaded_file = st.file_uploader("Upload encrypted FINNONE Excel file", type=["xlsx", "xls", "xlrd"])
@@ -105,7 +114,7 @@ def main():
 
             st.sidebar.header("Actions")
             st.sidebar.download_button(
-                label="📥 Download Extracted Data",
+                label=" Download Extracted Data",
                 data=output,
                 file_name=f"FINNONE ENCODING {(pd.Timestamp.now() - pd.Timedelta(days=1)).strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

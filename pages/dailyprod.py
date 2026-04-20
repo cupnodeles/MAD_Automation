@@ -1,9 +1,18 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
 
 st.set_page_config(page_title="Daily Prod", layout="wide")
+
+# Apply consistent premium design
+set_premium_style()
+
 
 PAGE_MAP = {
     "Home": "Main.py",
@@ -91,7 +100,7 @@ def classify_remark(remark):
     return None, None
 
 def main():
-    st.title("📊 DRR Cleaner & RFD Remark Classifier")
+    st.title(" DRR Cleaner & RFD Remark Classifier")
     st.markdown("Upload a file to clean and classify remarks into RFD/SUB-RFD categories.")
     
     uploaded_file = st.file_uploader("Upload CSV or Excel file", type=["csv", "xlsx", "xls"])
@@ -142,7 +151,7 @@ def main():
             col3.metric("Uncategorized", len(df_cleaned[df_cleaned["RFD"] == "UNCATEGORIZED"]))
 
             # Visual Summaries
-            tab1, tab2 = st.tabs(["📈 Classification Stats", "📄 Data Preview"])
+            tab1, tab2 = st.tabs([" Classification Stats", " Data Preview"])
             
             with tab1:
                 c1, c2 = st.columns(2)
@@ -164,7 +173,7 @@ def main():
 
             st.sidebar.header("Actions")
             st.sidebar.download_button(
-                label="📥 Download Processed File",
+                label=" Download Processed File",
                 data=output,
                 file_name="one_prod_data.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

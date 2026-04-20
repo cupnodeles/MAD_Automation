@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 import os
@@ -7,6 +12,10 @@ from io import BytesIO
 
 # --- CONFIGURATION ---
 st.set_page_config(page_title="Collection Efforts Automation (Combined)", layout="wide")
+
+# Apply consistent premium design
+set_premium_style()
+
 
 PAGE_MAP = {
     "Home": "Main.py",
@@ -143,7 +152,7 @@ def main():
 
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("💾 Save to Callouts Folder"):
+                        if st.button(" Save to Callouts Folder"):
                             ts = datetime.now().strftime("%Y%m%d")
                             save_filename = f"CE_COMBINED_{ts}.xlsx"
                             full_path = os.path.join(SAVE_PATH, save_filename)
@@ -151,13 +160,13 @@ def main():
                                 with open(full_path, "wb") as f:
                                     f.write(output.getvalue())
                                 st.balloons()
-                                st.success(f"✅ Saved to: {full_path}")
+                                st.success(f" Saved to: {full_path}")
                             except Exception as e:
                                 st.error(f"Could not save file. Error: {e}")
 
                     with col2:
                         st.download_button(
-                            label="📥 Download to Browser",
+                            label=" Download to Browser",
                             data=output.getvalue(),
                             file_name=f"CE_COMBINED_{datetime.now().strftime('%Y%m%d')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"

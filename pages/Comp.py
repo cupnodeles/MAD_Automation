@@ -1,9 +1,18 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
 # Set page layout to wide to accommodate side-by-side comparison tables
 st.set_page_config(page_title="Excel S.No Comparator", layout="wide")
+
+# Apply consistent premium design
+set_premium_style()
+
 
 def compare_files(df1, df2):
     # Identify the S.No column (assumed to be the first column)
@@ -34,7 +43,7 @@ def main():
     st.warning("Only for S.No")
 
     # --- UI Header ---
-    st.title("📑 S.No Comparator")
+    st.title(" S.No Comparator")
     st.markdown("""
     This tool compares two Excel files based on the **S.No (Column A)**. 
     It will isolate missing rows and highlight specific cell changes.
@@ -65,7 +74,7 @@ def main():
         m3.metric("Data Mismatches", len(diffs))
 
         # Tabs for detailed view
-        tab1, tab2, tab3 = st.tabs(["❌ Missing in File B", "➕ New in File B", "🔄 Data Mismatches"])
+        tab1, tab2, tab3 = st.tabs([" Missing in File B", "➕ New in File B", "🔄 Data Mismatches"])
 
         with tab1:
             if not missing_b.empty:
@@ -92,7 +101,7 @@ def main():
         # --- Export Feature ---
         if not diffs.empty or not missing_b.empty or not missing_a.empty:
             st.divider()
-            st.subheader("📥 Download Discrepancy Report")
+            st.subheader(" Download Discrepancy Report")
             
             output = BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:

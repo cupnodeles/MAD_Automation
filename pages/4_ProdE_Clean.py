@@ -1,3 +1,8 @@
+import sys
+import os
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from ui_utils import set_premium_style
+
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -12,7 +17,7 @@ def main():
         df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
         
         # --- FILTER ROWS BASED ON STATUS AND REMARK BY ---
-        st.subheader("🔍 Filtering Data")
+        st.subheader(" Filtering Data")
         
         # Track removed rows for reporting
         total_rows_before = len(df)
@@ -25,9 +30,9 @@ def main():
             df = df[df['Status'].astype(str) != 'BP']
             removed_status_rows = status_before - len(df)
             if removed_status_rows > 0:
-                st.warning(f"🗑️ Removed {removed_status_rows} row(s) with Status = 'BP'")
+                st.warning(f" Removed {removed_status_rows} row(s) with Status = 'BP'")
         else:
-            st.warning("⚠️ 'Status' column not found - cannot filter by Status")
+            st.warning(" 'Status' column not found - cannot filter by Status")
         
         # Filter Remark By: Remove rows with specified names
         if 'Remark By' in df.columns:
@@ -40,20 +45,20 @@ def main():
             
             removed_remarkby_rows = remark_before - len(df)
             if removed_remarkby_rows > 0:
-                st.warning(f"🗑️ Removed {removed_remarkby_rows} row(s) with Remark By in: {', '.join(excluded_remark_by)}")
+                st.warning(f" Removed {removed_remarkby_rows} row(s) with Remark By in: {', '.join(excluded_remark_by)}")
         else:
-            st.warning("⚠️ 'Remark By' column not found - cannot filter by Remark By")
+            st.warning(" 'Remark By' column not found - cannot filter by Remark By")
         
         # Summary of filtering
         total_removed = removed_status_rows + removed_remarkby_rows
         if total_removed > 0:
-            st.success(f"✅ Total rows removed: {total_removed} (from {total_rows_before} to {len(df)} rows)")
+            st.success(f" Total rows removed: {total_removed} (from {total_rows_before} to {len(df)} rows)")
         
         # --- DELETE LAST 2 COLUMNS ---
         if len(df.columns) > 2:
             cols_to_remove = df.columns[-2:].tolist()
             df = df.iloc[:, :-2]
-            st.warning(f"🗑️ Deleted last 2 columns: {', '.join(cols_to_remove)}")
+            st.warning(f" Deleted last 2 columns: {', '.join(cols_to_remove)}")
         
         # --- MOVE LOGIC ---
         column_to_move = "Next Call"
@@ -78,7 +83,7 @@ def main():
             col = df.pop(next_call_col)
             df.insert(actual_target, next_call_col, col)
             
-            st.success("✅ Column Shifted and Cleanup Complete!")
+            st.success(" Column Shifted and Cleanup Complete!")
             
             # Show preview
             st.subheader("Preview of processed data:")
@@ -102,10 +107,12 @@ def main():
         output.seek(0)
 
         st.download_button(
-            label="⬇️ Download Processed File",
+            label=" Download Processed File",
             data=output,
             file_name=file_name,
             mime=mime_type
         )
 
 main()
+# Apply consistent premium design
+set_premium_style()
