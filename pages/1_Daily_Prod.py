@@ -798,9 +798,9 @@ PASSWORD = "MAD_2Q2026"
 NAMES_TO_REPLACE = ["Mendoza, Joshua"]
 
 # Template settings
-MASTER_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATE.xlsm"
+MASTER_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm"
 # Use {date} for YYYYMMDD and {bucket} for the bucket number (120, 150, etc)
-CAMPAIGN_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\PL_2026{date}_{bucket}_Madrid.xlsx"
+CAMPAIGN_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\PL_2026{Month}{Day}_{Campaign}_Madrid.xlsx"
 # Which buckets to split into separate files
 BUCKETS_TO_PROCESS = [120, 150, 180]
 
