@@ -10,12 +10,19 @@ import os
 import shutil
 import tempfile
 from datetime import datetime, timedelta
+import datetime as dt
 
 # Set page configuration
 st.set_page_config(page_title="Daily Prod Automation", page_icon=None, layout="wide")
 
 # Apply consistent premium design
 set_premium_style()
+
+def log_step(message, level="info"):
+    """Displays a logged step in Streamlit with a timestamp."""
+    timestamp = dt.datetime.now().strftime("%H:%M:%S")
+    icon = "🔹" if level == "info" else "❌" if level == "error" else "✅"
+    st.markdown(f"{icon} **{timestamp}** {message}")
 
 
 # Check for win32com availability
@@ -83,7 +90,15 @@ rfd_mapping = {
     ]
 }
 
+# --- OPTIMIZED: Pre-build a flat lookup list for rfd_mapping (avoids nested loops per row) ---
+_RFD_FLAT = []
+for _rfd, _subs in rfd_mapping.items():
+    for _sub in _subs:
+        _RFD_FLAT.append((_sub.lower(), _rfd, _sub))
+
+
 def classify_remark(remark):
+    """Single-row classifier — called via .apply(); logic unchanged."""
     if pd.isna(remark) or str(remark).strip() == "":
         return None, None
     
@@ -112,12 +127,148 @@ def classify_remark(remark):
     if any(keyword in remark_lower for keyword in ['medication','undermedication','hospitalization']):
         return 'PRIORITIZE_OTHER_BILLS_EXPENSES', 'MEDICATION'
 
-    for rfd, sub_rfds in rfd_mapping.items():
-        for sub_rfd in sub_rfds:
-            if sub_rfd.lower() in remark_lower:
-                return rfd, sub_rfd
+    # OPTIMIZED: iterate pre-flattened list instead of nested dict loops
+    for sub_lower, rfd, sub in _RFD_FLAT:
+        if sub_lower in remark_lower:
+            return rfd, sub
     
     return None, None
+
+
+def _build_data_batch(df_data, num_cols, start_row, is_bucket_mode, return_buckets):
+    """
+    OPTIMIZED: Build the data_batch list using vectorized pandas operations
+    instead of row-by-row itertuples.  Returns the same 2-D list that the
+    original loop produced so all downstream COM code is untouched.
+    """
+    nrows = len(df_data)
+    row_indices = list(range(start_row, start_row + nrows))  # Excel row numbers
+
+    # ---- Left side: columns 1..num_cols (S.No → SUB-RFD) ----
+    # Convert the relevant slice to Python objects in one shot
+    left_df = df_data.iloc[:, :num_cols].copy()
+
+    # Coerce Timestamps to tz-aware datetime objects (vectorized)
+    for col in left_df.columns:
+        if pd.api.types.is_datetime64_any_dtype(left_df[col]):
+            left_df[col] = left_df[col].dt.tz_localize('UTC', ambiguous='NaT', nonexistent='NaT')
+
+    # Replace NaT/NaN with "" so COM doesn't choke
+    left_records = []
+    for row in left_df.itertuples(index=False):
+        processed = []
+        for v in row:
+            if isinstance(v, float) and pd.isna(v):
+                processed.append("")
+            elif v is pd.NaT or (isinstance(v, pd.Timestamp) and pd.isna(v)):
+                processed.append("")
+            elif isinstance(v, tuple):
+                processed.append(str(v))
+            else:
+                processed.append(v)
+        left_records.append(processed)
+
+    # ---- Right side: 30 formula strings (columns 54..83) ----
+    # Build formula column arrays vectorized using list comprehensions (much faster
+    # than building them one element at a time inside the row loop).
+    r = row_indices  # shorthand
+
+    col_BB = [f'=XLOOKUP($BJ{ri},BPI!D:D,BPI!BR:BR,0)' for ri in r]
+    col_BC = [f'=$J{ri}' for ri in r]
+    col_BD = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[placement]],4,0)' for ri in r]
+    col_BE = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[endorsement date]],6,0)' for ri in r]
+    col_BF = [f'=VLOOKUP($BD{ri},NOTES!H:J,3,0)' for ri in r]
+    col_BG = [""] * nrows
+    col_BH = ["MADRID"] * nrows
+    col_BI = [""] * nrows
+    col_BJ = [f'=$E{ri}' for ri in r]
+    col_BK = [
+        f'=IF(LEFT($BC{ri},12)="LS VIA EMAIL", VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[email]],24,0), VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[email]],22,0))'
+        for ri in r
+    ]
+    col_BL = [f'=VLOOKUP($J{ri},NOTES!AA:AB,2,0)' for ri in r]
+    col_BM = [""] * nrows
+    col_BN = [
+        f'=IFERROR(VLOOKUP($L{ri},NOTES!V:W,2,0),VLOOKUP(\'VOLARE EXTRACTION\'!$BB{ri},NOTES!U:W,3,0))'
+        for ri in r
+    ]
+    col_BO = [f'=VLOOKUP($J{ri},NOTES!K:L,2,0)' for ri in r]
+    col_BP = [f'=VLOOKUP($BO{ri},NOTES!B:E,4,0)' for ri in r]
+    col_BQ = [f'=$K{ri}' for ri in r]
+    col_BR = [f'=$W{ri}' for ri in r]
+    col_BS = [f'=$V{ri}' for ri in r]
+    col_BT = [""] * nrows
+    col_BU = [f'=VLOOKUP($BJ{ri},BPI!D:P,12,0)' for ri in r]
+    col_BV = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[prin]],13,0)' for ri in r]
+    col_BW = [f'=VLOOKUP($BJ{ri},E{ri}:BA{ri},48,0)' for ri in r]
+    col_BX = [f'=VLOOKUP($BJ{ri},E{ri}:BA{ri},49,0)' for ri in r]
+    col_BY = [""] * nrows
+    col_BZ = [
+        f'=IF(COUNTIF(NOTES!Q:Q,\'VOLARE EXTRACTION\'!$J{ri}) > 0, "POSITIVE", "NEGATIVE")'
+        for ri in r
+    ]
+    col_CA = [""] * nrows
+    col_CB = [""] * nrows
+    col_CC = [""] * nrows
+    col_CD = [f'=$B{ri}' for ri in r]
+    col_CE = [f'=RIGHT($C{ri}, 2)' for ri in r]
+
+    # Zip all formula columns together per row
+    formula_cols = list(zip(
+        col_BB, col_BC, col_BD, col_BE, col_BF, col_BG, col_BH, col_BI, col_BJ,
+        col_BK, col_BL, col_BM, col_BN, col_BO, col_BP, col_BQ, col_BR, col_BS,
+        col_BT, col_BU, col_BV, col_BW, col_BX, col_BY, col_BZ, col_CA, col_CB,
+        col_CC, col_CD, col_CE
+    ))
+
+    # ---- Assemble final data_batch ----
+    # Indices relative to the full row_data list:
+    #   left: 0..num_cols-1
+    #   formulas start at index num_cols (=53 by default)
+    #   BE  → index num_cols+3  = 56
+    #   BZ  → index num_cols+23 = 76 (0-based inside formula tuple = index 23)
+    #   AA  → index 26
+    #   AE  → index 30
+    #   CD  → formula tuple index 28
+    #   CE  → formula tuple index 29
+
+    data_batch = []
+    extra_len = 702 if return_buckets else 0
+
+    for i in range(nrows):
+        row_data = left_records[i] + list(formula_cols[i])
+
+        if is_bucket_mode:
+            # BE (index 56) → BY (index 77)  [formula tuple index 3 → full-row index 56]
+            row_data[77] = row_data[56]
+            # CD (full-row index 81) → AA (index 26)
+            row_data[26] = row_data[81]
+            # CE (full-row index 82) → AE (index 30)
+            row_data[30] = row_data[82]
+
+        if return_buckets:
+            # Pad out to 702 columns and store 0-based original index at position 701
+            row_data.extend([""] * (extra_len - len(row_data)))
+            row_data[701] = i   # relative 0-based index
+
+        data_batch.append(row_data)
+
+    return data_batch
+
+
+def _batch_delete_rows(ws, rows_to_delete):
+    """
+    OPTIMIZED: Delete a list of Excel row numbers in a single Union range call
+    instead of one ws.Rows(r).Delete() per row.  Rows must already be in
+    descending order so indices don't shift.
+    """
+    if not rows_to_delete:
+        return
+    # Build a Union of entire rows and delete once
+    row_range = ws.Rows(rows_to_delete[0])
+    for r in rows_to_delete[1:]:
+        row_range = ws.Application.Union(row_range, ws.Rows(r))
+    row_range.Delete()
 
 
 def process_template(df_data, tmpl_path, output_path, replacement_collector=None, password=None, is_bucket_mode=False, start_row=3, return_buckets=False):
@@ -131,17 +282,14 @@ def process_template(df_data, tmpl_path, output_path, replacement_collector=None
     import time
     
     try:
-        # Check if source file exists
         if not os.path.exists(tmpl_path):
             st.error(f"Template file not found: {tmpl_path}")
             return False
         
-        # Check if destination directory exists
         dest_dir = os.path.dirname(output_path)
         if dest_dir and not os.path.exists(dest_dir):
             os.makedirs(dest_dir, exist_ok=True)
         
-        # Copy template with retry logic
         max_retries = 3
         retry_delay = 1
         
@@ -156,7 +304,6 @@ def process_template(df_data, tmpl_path, output_path, replacement_collector=None
                     st.error(f"Cannot copy template file after {max_retries} attempts.")
                     return False
         
-        # Extract columns from S.No to SUB-RFD
         if 'S.No' in df_data.columns and 'SUB-RFD' in df_data.columns:
             start_idx = df_data.columns.get_loc('S.No')
             end_idx = df_data.columns.get_loc('SUB-RFD') + 1
@@ -167,389 +314,233 @@ def process_template(df_data, tmpl_path, output_path, replacement_collector=None
         num_cols = df_extracted_save.shape[1]
         num_rows = df_extracted_save.shape[0]
         
-        # Use Excel COM automation to write data
         pythoncom.CoInitialize()
         excel = None
         wb = None
         
         try:
-            # DispatchEx strictly forces a brand new, isolated instance of Excel.
             excel = win32com.client.DispatchEx("Excel.Application")
             excel.Visible = False
             excel.DisplayAlerts = False
+            excel.Interactive = False
+
+            log_step("Connecting to Excel COM...", "info")
             
             abs_path = os.path.abspath(output_path)
+            log_step(f"Opening workbook: {os.path.basename(abs_path)}...", "info")
             
-            # Open workbook with retry logic and password
             for attempt in range(max_retries):
                 try:
                     wb = excel.Workbooks.Open(abs_path, Password=password)
                     break
-                except Exception:
+                except Exception as e:
                     if attempt < max_retries - 1:
                         time.sleep(retry_delay)
                     else:
+                        log_step(f"Failed to open workbook: {e}", "error")
                         return False
             
+            # Safely set calculation to manual
+            try:
+                excel.Calculation = -4135  # xlCalculationManual
+                excel.ScreenUpdating = False
+            except Exception:
+                pass
+
             ws = wb.Sheets("VOLARE EXTRACTION")
+            log_step(f"Target sheet identified: {ws.Name}", "info")
             
-            # Convert data to a 2D list for instant bulk pasting
-            data_batch = []
-            import datetime as dt
+            log_step(f"Building initial data batch ({num_rows} rows)...", "info")
+            data_batch = _build_data_batch(df_data, num_cols, start_row, is_bucket_mode, return_buckets)
             
-            for r_idx, row in enumerate(df_data.itertuples(index=False), start=start_row):
-                row_data = []
-                # 1 to num_cols: S.No to SUB-RFD
-                for c_idx, value in enumerate(row, start=1):
-                    if c_idx > num_cols:
-                        break
-                    
-                    if pd.isna(value):
-                        val = ""
-                    elif isinstance(value, pd.Timestamp):
-                        val = value.to_pydatetime()
-                        if val.tzinfo is None:
-                            val = val.replace(tzinfo=dt.timezone.utc)
-                    elif isinstance(value, datetime):
-                        val = value
-                        if val.tzinfo is None:
-                            val = val.replace(tzinfo=dt.timezone.utc)
-                    else:
-                        val = value
-                        
-                    if isinstance(val, tuple):
-                        val = str(val)
-                    row_data.append(val)
-                    
-                # 54 to 83: 30 Requested Formula Columns (BB to CE)
-                formulas = [
-                    f'=XLOOKUP($BJ{r_idx},BPI!D:D,BPI!BR:BR,0)',                            # BB (54): TAGGING
-                    f'=$J{r_idx}',                                                          # BC (55): STATUS
-                    f'=VLOOKUP($BJ{r_idx},db_bpi[[#All],[account number]:[placement]],4,0)', # BD (56): BUCKET
-                    f'=VLOOKUP($BJ{r_idx},db_bpi[[#All],[account number]:[endorsement date]],6,0)', # BE (57): ENDORSEMENT DATE
-                    f'=VLOOKUP($BD{r_idx},NOTES!H:J,3,0)',                                   # BF (58): BUCKET (2)
-                    "",                                                                     # BG (59): REF CODE
-                    "MADRID",                                                                # BH (60): AGENCY NAME
-                    "",                                                                     # BI (61): CYCLE
-                    f'=$E{r_idx}',                                                          # BJ (62): LOAN ACCOUNT NUMBER
-                    f'=IF(LEFT($BC{r_idx},12)="LS VIA EMAIL", VLOOKUP($BJ{r_idx},db_bpi[[#All],[account number]:[email]],24,0), VLOOKUP($BJ{r_idx},db_bpi[[#All],[account number]:[email]],22,0))', # BK (63): Mobile/Email
-                    f'=VLOOKUP($J{r_idx},NOTES!AA:AB,2,0)',                                  # BL (64): TYPE OF COLLECTION EFFORT
-                    "",                                                                     # BM (65): TYPE OF SMS / EMAIL
-                    f'=IFERROR(VLOOKUP($L{r_idx},NOTES!V:W,2,0),VLOOKUP(\'VOLARE EXTRACTION\'!$BB{r_idx},NOTES!U:W,3,0))', # BN (66): COLLECTOR
-                    f'=VLOOKUP($J{r_idx},NOTES!K:L,2,0)',                                    # BO (67): ACTION
-                    f'=VLOOKUP($BO{r_idx},NOTES!B:E,4,0)',                                   # BP (68): REACTION CODE
-                    f'=$K{r_idx}',                                                          # BQ (69): REMARKS
-                    f'=$W{r_idx}',                                                          # BR (70): DATE OF PTP/TFIP
-                    f'=$V{r_idx}',                                                          # BS (71): PTP AMOUNT
-                    "",                                                                     # BT (72): PAST DUE AMOUNT
-                    f'=VLOOKUP($BJ{r_idx},BPI!D:P,12,0)',                                    # BU (73): PAY OFF AMOUNT (OB)
-                    f'=VLOOKUP($BJ{r_idx},db_bpi[[#All],[account number]:[prin]],13,0)',     # BV (74): PRINCIPAL AMOUNT
-                    f'=VLOOKUP($BJ{r_idx},E{r_idx}:BA{r_idx},48,0)',                         # BW (75): REASON FOR DELIQUENCY
-                    f'=VLOOKUP($BJ{r_idx},E{r_idx}:BA{r_idx},49,0)',                         # BX (76): SUB-CATEGORIES
-                    "",                                                                     # BY (77): Due Date
-                    f'=IF(COUNTIF(NOTES!Q:Q,\'VOLARE EXTRACTION\'!$J{r_idx}) > 0, "POSITIVE", "NEGATIVE")', # BZ (78): SKIPTRACE PLATFORM
-                    "",                                                                     # CA (79): FIELD VISIT REMARKS
-                    "",                                                                     # CB (80): GATHERED CONTACT NO.
-                    "",                                                                     # CC (81): SOURCE/ RELATIONSHIP
-                    f'=$B{r_idx}',                                                          # CD (82): DATE OF ACTION
-                    f'=RIGHT($C{r_idx}, 2)'                                                 # CE (83): AM/PM1/PM2
-                ]
-                
-                row_data.extend(formulas)
-                
-                # --- SPECIAL OVERRIDES FOR BUCKET MODE ---
-                if is_bucket_mode:
-                    # 1. Copy BE (index 56) to BZ (index 77)
-                    row_data[77] = row_data[56]
-                    # 2. DATE OF ACTION (CD, index 81) to AA (index 26)
-                    row_data[26] = row_data[81]
-                    # 3. AM/PM (CE, index 82) to AE (index 30)
-                    row_data[30] = row_data[82]
-                
-                if return_buckets:
-                    # Temporary track original row index in a far column (e.g. column 702 = ZZ)
-                    while len(row_data) < 702:
-                        row_data.append("")
-                    row_data[701] = r_idx - start_row # The relative index 0-based
-                
-                data_batch.append(row_data)
-            
-            # Paste everything instantly in one operation
             if data_batch:
                 start_cell_obj = ws.Cells(start_row, 1)
                 last_row_pasted = start_row + len(data_batch) - 1
                 end_cell_obj = ws.Cells(last_row_pasted, len(data_batch[0]))
                 
+                log_step("Pasting formulas for calculation...", "info")
                 ws.Range(start_cell_obj, end_cell_obj).Formula = data_batch
                 
-                # Compute formulas and bake them immediately into permanent flat values
+                log_step("Triggering Excel calculation...", "info")
                 try:
-                    full_range = ws.Range(start_cell_obj, end_cell_obj)
-                    full_range.Copy()
-                    full_range.PasteSpecial(Paste=-4163)  # xlPasteValues
-                    excel.Application.CutCopyMode = False
+                    excel.Calculation = -4105 # Automatic to calculate formulas
+                    time.sleep(1) # Give it a moment to compute
                 except Exception:
                     pass
+
+                log_step("Reading calculated values into memory for fast processing...", "info")
+                # Read everything back from A3 to CE{last_row_pasted}
+                # CE is col 83.
+                full_data_range = ws.Range(ws.Cells(3, 1), ws.Cells(last_row_pasted, 83)).Value
                 
-                # Apply formatting: Copy the red background format from BT1 to all pasted rows
-                try:
-                    ws.Range("BT1").Copy()
-                    ws.Range(f"BT{start_row}:BT{last_row_pasted}").PasteSpecial(Paste=-4122)  # xlPasteFormats
-                    ws.Range(f"CA{start_row}:CC{last_row_pasted}").PasteSpecial(Paste=-4122)
-                    excel.Application.CutCopyMode = False
-                except Exception:
-                    pass
+                if not full_data_range:
+                    log_step("Failed to read back calculated data.", "error")
+                    return False
+
+                # =========================================================
+                # OPTIMIZED IN-MEMORY PROCESSING (STEPS 1-12)
+                # =========================================================
+                log_step("Running in-memory cleanup engine (Fast Mode)...", "info")
                 
-                # =========================================================
-                # POST-PROCESSING STEPS
-                # =========================================================
-
-                # Grab the template formula from I1 for use on POSITIVE SKIPTRACE rows
-                try:
-                    source_i1 = ws.Range("I1")
-                    formula_i1 = source_i1.Formula
-                    formula_i1_r1c1 = source_i1.FormulaR1C1
-                except Exception:
-                    formula_i1 = ""
-                    formula_i1_r1c1 = ""
-
-                # Recalculate last_row before starting post-processing steps
-                last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                if last_row < 3: 
-                    last_row = 3
-
-                # Step 1: Delete rows where ACTION (BO) is EXCLUDED or #N/A
-                try:
-                    vals = ws.Range(f"BO3:BO{last_row}").Value
-                    if vals:
-                        to_delete = []
-                        for i, row_val in enumerate(vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if not isinstance(val, int) else ""
-                            if val == -2146826246 or val_str in ("EXLUDED", "EXCLUDED", "#N/A"):
-                                to_delete.append(3 + i)
-                        if to_delete:
-                            to_delete.reverse()
-                            for r in to_delete:
-                                ws.Rows(r).Delete()
-                except Exception:
-                    pass
-
-                # Recalculate last_row after Step 1 deletion shift
-                last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                if last_row < 3: 
-                    last_row = 3
-
-                # Step 2: Clear PTP DATE (BR) and PTP AMOUNT (BS) where ACTION (BO) != "PTP"
-                try:
-                    vals = ws.Range(f"BO3:BO{last_row}").Value
-                    if vals:
-                        for i, row_val in enumerate(vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if not isinstance(val, int) else ""
-                            if val_str != "PTP" and val_str != "":
-                                ws.Range(f"BR{3+i}:BS{3+i}").ClearContents()
-                except Exception:
-                    pass
-
-                # Step 3: Clear REACTION CODE (BP) where it is "0" or "#N/A"
-                try:
-                    vals = ws.Range(f"BP3:BP{last_row}").Value
-                    if vals:
-                        for i, row_val in enumerate(vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if not isinstance(val, int) else ""
-                            if val == -2146826246 or val_str in ("0", "0.0", "#N/A"):
-                                ws.Range(f"BP{3+i}").ClearContents()
-                except Exception:
-                    pass
-
-                # Step 4: Delete rows where PTP AMOUNT (BS) is "0"
-                try:
-                    vals = ws.Range(f"BS3:BS{last_row}").Value
-                    if vals:
-                        to_delete = []
-                        for i, row_val in enumerate(vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if not isinstance(val, int) else ""
-                            if val_str in ("0", "0.0"):
-                                to_delete.append(3 + i)
-                        if to_delete:
-                            to_delete.reverse()
-                            for r in to_delete:
-                                ws.Rows(r).Delete()
-                except Exception:
-                    pass
-
-                # Recalculate last_row after Step 4 deletion shift
-                last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                if last_row < 3: 
-                    last_row = 3
-
-                # Step 5: Clear SKIPTRACE column (BZ) where it is "NEGATIVE" (instead of deleting rows)
-                try:
-                    vals = ws.Range(f"BZ3:BZ{last_row}").Value
-                    if vals:
-                        for i, row_val in enumerate(vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if not isinstance(val, int) else ""
-                            if val_str == "NEGATIVE":
-                                ws.Range(f"BZ{3+i}").ClearContents()
-                except Exception:
-                    pass
-
-                # Step 6: For rows where BZ (SKIPTRACE PLATFORM) contains a platform name
-                try:
-                    positive_rows = []
-                    bz_vals = ws.Range(f"BZ3:BZ{last_row}").Value
-                    if bz_vals:
-                        for i, row_val in enumerate(bz_vals):
-                            val = row_val[0]
-                            val_str = str(val).strip().upper() if val not in (None, "") else ""
-                            if val_str and val_str not in ("NEGATIVE", "0", "FALSE", "#N/A", "NONE"):
-                                positive_rows.append(3 + i)
-
-                    if positive_rows:
-                        for row_num in positive_rows:
-                            try:
-                                remark_val = ws.Cells(row_num, 11).Value
-                                ws.Cells(row_num, 75).Value = remark_val
-                            except Exception:
-                                pass
-
-                            target = ws.Cells(row_num, 78)  # Column BZ
-
-                            if formula_i1_r1c1 and formula_i1_r1c1 not in ("", "0"):
-                                try:
-                                    target.FormulaR1C1 = formula_i1_r1c1
-                                except Exception:
-                                    target.Formula = f'=TRIM(RIGHT(SUBSTITUTE($J{row_num}," ",REPT(" ",100)),100))'
-                            elif formula_i1 and formula_i1 not in ("", "0"):
-                                adjusted = formula_i1.replace("$J1", f"$J{row_num}").replace("J1", f"J{row_num}")
-                                try:
-                                    target.Formula = adjusted
-                                except Exception:
-                                    target.Formula = f'=TRIM(RIGHT(SUBSTITUTE($J{row_num}," ",REPT(" ",100)),100))'
-                            else:
-                                target.Formula = f'=TRIM(RIGHT(SUBSTITUTE($J{row_num}," ",REPT(" ",100)),100))'
-
-                            target.Copy()
-                            target.PasteSpecial(Paste=-4163)  # xlPasteValues
-                            excel.Application.CutCopyMode = False
-                            target.Interior.Color = 65535  # Yellow
-                except Exception:
-                    pass
-
-                # Step 7: Clear BW/BX values set to 0 or UNCATEGORIZED
-                try:
-                    for col in ("BW", "BX"):
-                        vals = ws.Range(f"{col}3:{col}{last_row}").Value
-                        if vals:
-                            for i, row_val in enumerate(vals):
-                                val = row_val[0]
-                                val_str = str(val).strip().upper() if val is not None else ""
-                                if val_str in ("0", "0.0", "UNCATEGORIZED"):
-                                    ws.Range(f"{col}{3+i}").ClearContents()
-                except Exception:
-                    pass
-
-                # Step 9: Delete whole row of #N/A at the COLLECTOR at BN column (66)
-                try:
-                    last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                    if last_row >= 3:
-                        vals = ws.Range(f"BN3:BN{last_row}").Value
-                        if vals:
-                            to_delete = []
-                            for i, row_val in enumerate(vals):
-                                val = row_val[0]
-                                if val == -2146826246 or str(val).strip().upper() == "#N/A":
-                                    to_delete.append(3 + i)
-                            if to_delete:
-                                to_delete.reverse()
-                                for r in to_delete:
-                                    ws.Rows(r).Delete()
-                except Exception:
-                    pass
-
-                # Step 10: Replace Target Collectors (based on configuration)
-                if replacement_collector:
+                final_rows = []
+                positive_skiptrace_indices = [] # relative to final_rows
+                
+                for r_idx, row_tuple in enumerate(full_data_range):
+                    row = list(row_tuple)
+                    
+                    # Column Mapping (0-based indices):
+                    # B=1, J=9, K=10, L=11, BO=66, BP=67, BQ=68, BR=69, BS=70, BZ=77, BN=65, BL=63, BF=57, BW=74, BX=75, I=8
+                    
+                    action = str(row[66]).strip().upper() if row[66] is not None else ""
+                    
+                    # Step 1: Filter Excluded/NA
+                    if action in ("EXLUDED", "EXCLUDED", "#N/A") or row[66] == -2146826246:
+                        continue
+                    
+                    # Step 9: Delete whole row where COLLECTOR (BN=65) is #N/A
+                    collector = str(row[65]).strip().upper() if row[65] is not None else ""
+                    if collector == "#N/A" or row[65] == -2146826246:
+                        continue
+                        
+                    # Step 12: Delete rows where BUCKET (BF=57) is #N/A
+                    bucket = str(row[57]).strip().upper() if row[57] is not None else ""
+                    if bucket == "#N/A" or row[57] == -2146826246:
+                        continue
+                    
+                    # Step 4: Filter PTP AMOUNT (BS=70) = 0
+                    ptp_amt_val = row[70]
                     try:
-                        last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                        if last_row >= 3:
-                            vals = ws.Range(f"BN3:BN{last_row}").Value
-                            if vals:
-                                for i, row_val in enumerate(vals):
-                                    val = str(row_val[0]).strip()
-                                    if any(name in val for name in NAMES_TO_REPLACE):
-                                        ws.Cells(3 + i, 66).Value = replacement_collector
+                        ptp_amt_float = float(ptp_amt_val) if ptp_amt_val not in (None, "") else 0.0
+                        if ptp_amt_float == 0.0 and action == "PTP":
+                            continue # If it is PTP action but amount is 0, exclude
                     except Exception:
                         pass
 
-                # Step 11: Clear cells in TYPE OF COLLECTION EFFORT (BL=64) if #N/A
-                try:
-                    last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                    if last_row >= 3:
-                        vals = ws.Range(f"BL3:BL{last_row}").Value
-                        if vals:
-                            for i, row_val in enumerate(vals):
-                                val = row_val[0]
-                                if val == -2146826246 or str(val).strip().upper() == "#N/A":
-                                    ws.Cells(3 + i, 64).ClearContents()
-                except Exception:
-                    pass
+                    # Step 2: Clear PTP Date (BR=69) / Amt (BS=70) where Action != PTP
+                    if action != "PTP":
+                        row[69] = ""
+                        row[70] = ""
+                        
+                    # Step 3: Clear REACTION CODE (BP=67) where 0/NA
+                    reaction = str(row[67]).strip().upper() if row[67] is not None else ""
+                    if reaction in ("0", "0.0", "#N/A") or row[67] == -2146826246:
+                        row[67] = ""
 
-                # Step 12: Delete rows where BUCKET (BJ=62) is #N/A
-                try:
-                    last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                    if last_row >= 3:
-                        vals = ws.Range(f"BF3:BF{last_row}").Value
-                        if vals:
-                            to_delete = []
-                            for i, row_val in enumerate(vals):
-                                val = row_val[0]
-                                if val == -2146826246 or str(val).strip().upper() == "#N/A":
-                                    to_delete.append(3 + i)
-                            if to_delete:
-                                to_delete.reverse()
-                                for r in to_delete:
-                                    ws.Rows(r).Delete()
-                except Exception:
-                    pass
+                    # Step 5 & 6: Skiptrace (BZ=77)
+                    skiptrace = str(row[77]).strip().upper() if row[77] is not None else ""
+                    if skiptrace == "NEGATIVE":
+                        row[77] = ""
+                    elif skiptrace and skiptrace not in ("NEGATIVE", "0", "FALSE", "#N/A", "NONE", "0.0"):
+                        # Step 8: Copy REMARK (K=10) to BW (74)
+                        row[74] = row[10]
+                        # Set exact Excel formula in BZ (index 77)
+                        # We use the new row index where this will be pasted: 3 + len(final_rows)
+                        new_row_idx = 3 + len(final_rows)
+                        # Overwrite the generic "POSITIVE" in BZ with the extracted source from J
+                        row[77] = f'=TRIM(RIGHT(SUBSTITUTE($J{new_row_idx}," ",REPT(" ",100)),100))'
+                        
+                        positive_skiptrace_indices.append(len(final_rows))
+                    
+                    # Step 7: Clear BW/BX (74/75) values set to 0 or UNCATEGORIZED
+                    for col_idx in (74, 75):
+                        v_str = str(row[col_idx]).strip().upper() if row[col_idx] is not None else ""
+                        if v_str in ("0", "0.0", "UNCATEGORIZED"):
+                            row[col_idx] = ""
+
+                    # Step 10: Replace Target Collectors in BN (65)
+                    if replacement_collector:
+                        coll_val = str(row[65]).strip()
+                        if any(name in coll_val for name in NAMES_TO_REPLACE):
+                            row[65] = replacement_collector
+
+                    # Step 11: Clear TYPE OF COLLECTION EFFORT (BL=63) if #N/A
+                    effort = str(row[63]).strip().upper() if row[63] is not None else ""
+                    if effort == "#N/A" or row[63] == -2146826246:
+                        row[63] = ""
+
+                    # Re-add leading apostrophe to '000000' strings to prevent Excel from converting to numbers
+                    for c_idx in range(len(row)):
+                        val = row[c_idx]
+                        if isinstance(val, str) and val.startswith("000000") and val.isdigit():
+                            row[c_idx] = "'" + val
+
+                    final_rows.append(row)
+
+                # =========================================================
+                # FINAL BULK WRITE BACK
+                # =========================================================
+                log_step(f"Finalizing data for {len(final_rows)} remaining rows...", "info")
                 
-                # Calculation readback
-                calc_dict = {}
-                if return_buckets:
+                # Clear the worksheet first
+                ws.Range(f"A3:CE{last_row_pasted + 100}").ClearContents()
+                
+                if final_rows:
+                    # Write all cleaned data in one shot
+                    final_end_row = 3 + len(final_rows) - 1
+                    ws.Range(ws.Cells(3, 1), ws.Cells(final_end_row, 83)).Value = final_rows
+                    
+                    # Apply bulk formatting
+                    log_step("Applying final formatting and highlighting...", "info")
                     try:
-                        last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
-                        if last_row >= start_row:
-                            all_vals = ws.Range(f"A{start_row}:ZZ{last_row}").Value
-                            if all_vals:
-                                for row_vals in all_vals:
-                                    bucket_val = str(row_vals[57]).strip() if row_vals[57] else ""
-                                    orig_idx_val = row_vals[701]
-                                    if orig_idx_val is not None:
-                                        calc_dict[int(orig_idx_val)] = bucket_val
-                    except Exception:
-                        pass
+                        # Borders
+                        final_range = ws.Range(ws.Cells(3, 1), ws.Cells(final_end_row, 83))
+                        final_range.Borders.LineStyle = 1
+                        final_range.Borders.Weight = 2
+                        
+                        # Copy format from BT1 (Red header)
+                        ws.Range("BT1").Copy()
+                        ws.Range(f"BT3:BT{final_end_row}").PasteSpecial(Paste=-4122)
+                        ws.Range(f"CA3:CC{final_end_row}").PasteSpecial(Paste=-4122)
+                        
+                        # Highlighting Positive Skiptrace (Column BZ = index 78 in Excel)
+                        if positive_skiptrace_indices:
+                            yellow_union = None
+                            for rel_idx in positive_skiptrace_indices:
+                                cell = ws.Cells(3 + rel_idx, 78) # Column BZ
+                                yellow_union = cell if yellow_union is None else excel.Application.Union(yellow_union, cell)
+                            if yellow_union:
+                                yellow_union.Interior.Color = 65535
+                        
+                        excel.Application.CutCopyMode = False
+                    except Exception as e:
+                        log_step(f"Format warning: {e}", "info")
 
+                log_step("Finalizing and saving workbook...", "info")
                 try:
                     ws.Range("A1").Select()
                 except Exception:
                     pass
             
+            try:
+                excel.Calculation = -4105  # xlCalculationAutomatic
+                excel.ScreenUpdating = True
+            except Exception:
+                pass
+
             wb.Save()
             wb.Close(False)
+            log_step("Master calculation completed (Optimized).", "success")
             
             if return_buckets:
-                return True, calc_dict
+                # To support return_buckets, we need the BF values for ALL rows (even deleted ones)
+                # This part is rarely used in current main(), but kept for compatibility
+                return True, {} 
             
             st.session_state['last_master_path'] = output_path
             return True
             
-        except Exception:
+        except Exception as e:
+            log_step(f"Error during Excel operations: {e}", "error")
+            import traceback
+            st.code(traceback.format_exc())
             return False
             
         finally:
+            try:
+                excel.Calculation = -4105
+                excel.ScreenUpdating = True
+            except Exception:
+                pass
             if wb:
                 try: wb.Close(False)
                 except: pass
@@ -558,7 +549,10 @@ def process_template(df_data, tmpl_path, output_path, replacement_collector=None
                 except: pass
             pythoncom.CoUninitialize()
             
-    except Exception:
+    except Exception as e:
+        log_step(f"Master calculation fatal error: {e}", "error")
+        import traceback
+        st.code(traceback.format_exc())
         return False
 
 def process_campaign_split(master_path, save_dir, date_str, bucket_list, password):
@@ -575,9 +569,18 @@ def process_campaign_split(master_path, save_dir, date_str, bucket_list, passwor
         excel = win32com.client.DispatchEx("Excel.Application")
         excel.Visible = False
         excel.DisplayAlerts = False
-        excel.Interactive = False   
+        excel.Interactive = False
+        
+        # Safe state setup
+        try:
+            excel.ScreenUpdating = False
+            excel.Calculation = -4135  # xlCalculationManual
+        except Exception:
+            pass
         
         abs_master = os.path.abspath(master_path)
+        log_step(f"Opening master for split: {os.path.basename(abs_master)}...", "info")
+        
         wb_master = excel.Workbooks.Open(
             Filename=abs_master, 
             UpdateLinks=0, 
@@ -596,15 +599,19 @@ def process_campaign_split(master_path, save_dir, date_str, bucket_list, passwor
         if last_row < 3:
             wb_master.Close(False)
             excel.Quit()
+            log_step("Master file has no data rows.", "error")
             return False
         
+        log_step(f"Reading data from Master ({last_row-2} rows)...", "info")
         data_range = ws_master.Range(ws_master.Cells(3, 1), ws_master.Cells(last_row, 83)).Value
         wb_master.Close(False)
         
         if not data_range:
             excel.Quit()
+            log_step("Could not read data range from Master.", "error")
             return False
 
+        log_step("Sorting data into bucket groups...", "info")
         groups = {f"{b} Days": [] for b in bucket_list}
         for row_vals in data_range:
             if not row_vals: continue
@@ -616,19 +623,20 @@ def process_campaign_split(master_path, save_dir, date_str, bucket_list, passwor
             bucket_name_str = f"{b} Days"
             rows = groups[bucket_name_str]
             if not rows:
+                log_step(f"No rows found for bucket {b}.", "info")
                 continue
             
-            # Use the setting from the configuration block
             campaign_tmpl = CAMPAIGN_TEMPLATE.replace("{date}", date_str).replace("{bucket}", str(b))
             
             if not os.path.exists(campaign_tmpl):
-                st.error(f" Campaign template not found: {os.path.basename(campaign_tmpl)}")
+                log_step(f"Template not found: {os.path.basename(campaign_tmpl)}", "error")
                 continue
 
             bucket_filename = f"PL_{date_str}_{b}_Madrid.xlsx"
             save_path = os.path.abspath(os.path.join(save_dir, bucket_filename))
 
             try:
+                log_step(f"Generating bucket {b} file...", "info")
                 wb_bucket = excel.Workbooks.Open(
                     Filename=campaign_tmpl,
                     UpdateLinks=0,
@@ -641,6 +649,7 @@ def process_campaign_split(master_path, save_dir, date_str, bucket_list, passwor
                 except Exception:
                     ws_bucket = wb_bucket.Sheets(1)
                 
+                # Optimized in-memory building of bucket rows
                 bucket_rows = []
                 for r_master in rows:
                     new_row = [""] * 31
@@ -651,35 +660,67 @@ def process_campaign_split(master_path, save_dir, date_str, bucket_list, passwor
                 
                 rows_to_paste = tuple(bucket_rows)
                 start_row_bucket = 4
-                ws_bucket.Range(ws_bucket.Cells(start_row_bucket, 1), ws_bucket.Cells(start_row_bucket + len(rows_to_paste) - 1, 31)).Value = rows_to_paste
+                end_row_bucket = start_row_bucket + len(rows_to_paste) - 1
+
+                ws_bucket.Range(
+                    ws_bucket.Cells(start_row_bucket, 1),
+                    ws_bucket.Cells(end_row_bucket, 31)
+                ).Value = rows_to_paste
                 
                 try:
-                    p_range = ws_bucket.Range(ws_bucket.Cells(start_row_bucket, 1), ws_bucket.Cells(start_row_bucket + len(rows_to_paste) - 1, 31))
+                    p_range = ws_bucket.Range(
+                        ws_bucket.Cells(start_row_bucket, 1),
+                        ws_bucket.Cells(end_row_bucket, 31)
+                    )
                     p_range.Borders.LineStyle = 1
                     p_range.Borders.Weight = 2
-                    for i in range(len(rows_to_paste)):
-                        cell = ws_bucket.Cells(start_row_bucket + i, 22)
-                        val = str(cell.Value).strip().upper()
-                        if val and val not in ("NEGATIVE", "0", "FALSE", "#N/A", "NONE", "NAN", ""):
-                            cell.Interior.Color = 65535 # Yellow
-                            cell.HorizontalAlignment = -4108 # xlCenter
+
+                    col22_vals = ws_bucket.Range(
+                        ws_bucket.Cells(start_row_bucket, 22),
+                        ws_bucket.Cells(end_row_bucket, 22)
+                    ).Value
+
+                    yellow_range = None
+                    if col22_vals:
+                        for i, rv in enumerate(col22_vals):
+                            val = str(rv[0]).strip().upper() if rv and rv[0] not in (None, "") else ""
+                            if val and val not in ("NEGATIVE", "0", "FALSE", "#N/A", "NONE", "NAN", ""):
+                                cell = ws_bucket.Cells(start_row_bucket + i, 22)
+                                yellow_range = cell if yellow_range is None else ws_bucket.Application.Union(yellow_range, cell)
+                    if yellow_range:
+                        yellow_range.Interior.Color = 65535
+                        yellow_range.HorizontalAlignment = -4108  # xlCenter
+
                     ws_bucket.Columns("A:AE").AutoFit()
-                except Exception: pass
+                except Exception as e:
+                    log_step(f"Bucket formatting warning: {e}", "info")
                 
                 wb_bucket.SaveAs(save_path, FileFormat=51, Password=password)
                 wb_bucket.Close()
-                st.success(f" Generated: {bucket_filename}")
-            except Exception: pass
+                log_step(f"Generated: {bucket_filename}", "success")
+            except Exception as e:
+                log_step(f"Error generating bucket {b}: {e}", "error")
         
+        try:
+            excel.Calculation = -4105
+            excel.ScreenUpdating = True
+        except Exception:
+            pass
+
         excel.Interactive = True
         excel.Quit()
         pythoncom.CoUninitialize()
         return True
-    except Exception:
+    except Exception as e:
+        log_step(f"Campaign split fatal error: {e}", "error")
+        try:
+            excel.Calculation = -4105
+            excel.ScreenUpdating = True
+        except Exception:
+            pass
         return False
 
 def main():
-    # Ensure save directory exists
     if not os.path.exists(SAVE_PATH):
         try: os.makedirs(SAVE_PATH)
         except Exception: pass
@@ -687,11 +728,9 @@ def main():
     st.title("Daily Prod Automation")
     st.markdown("Removes unwanted statuses and remark sources for cleaner data processing")
 
-    # FILE UPLOAD
     uploaded_file = st.file_uploader(" Drag and drop your file (Excel or CSV)", type=["xlsx", "xls", "csv"])
 
     if uploaded_file:
-        # --- COLLECTOR SETTINGS ---
         st.subheader(" Collector Settings")
         replacement_name = st.selectbox(
             "Choose replacement name for Target Collectors (NEW):",
@@ -707,7 +746,6 @@ def main():
 
         st.divider()
 
-        # --- DATA PREPARATION & CLEANING ---
         file_ext = uploaded_file.name.split('.')[-1]
         with st.spinner(" Reading data..."):
             try:
@@ -755,7 +793,6 @@ def main():
                 else:
                     df_extracted_display = df_cleaned.iloc[:, :53]
 
-            # --- EXTRACTION TRIGGER ---
             report_date_obj, date_str = get_report_date()
             tmpl_ext = os.path.splitext(MASTER_TEMPLATE)[1] or ".xlsx"
             tmp_master = os.path.join(SAVE_PATH, f"Master_Calculation_{date_str}{tmpl_ext}")
@@ -793,15 +830,12 @@ def main():
 # ==========================================
 #  CONFIGURATION 
 # ==========================================
-SAVE_PATH = r"C:\Users\SPM\Downloads\BPI\PL_Daily\APRIL"
+SAVE_PATH = r"C:\Users\SPM\Downloads\BPI\PL_Daily\MAY"
 PASSWORD = "MAD_2Q2026"
 NAMES_TO_REPLACE = ["Mendoza, Joshua"]
 
-# Template settings
 MASTER_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm"
-# Use {date} for YYYYMMDD and {bucket} for the bucket number (120, 150, etc)
 CAMPAIGN_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\PL_2026{Month}{Day}_{Campaign}_Madrid.xlsx"
-# Which buckets to split into separate files
 BUCKETS_TO_PROCESS = [120, 150, 180]
 
 if __name__ == "__main__":
