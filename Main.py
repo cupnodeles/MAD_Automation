@@ -35,6 +35,7 @@ st.markdown('<p class="subtitle">Select a tool to launch it efficiently "one by 
 
 # Dynamic Page Mapping
 PAGE_MAP = {
+    "Worklist Dashboard": {"path": "pages/Dashboard.py", "desc": "Upload and inspect password-protected worklists at lightning speed without COM."},
     "Daily Prod": {"path": "pages/1_Daily_Prod.py", "desc": "Process daily production reports with cleaning logic."},
     "Collection Efforts Clean": {"path": "pages/2_CE_Clean.py", "desc": "Clean and format collection effort data."},
     "Collection Efforts Callout": {"path": "pages/3_CE_CALL.py", "desc": "Generate callout lists for collections."},

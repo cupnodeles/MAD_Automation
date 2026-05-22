@@ -134,19 +134,14 @@ def process_template(df_cleaned, tmpl_path, output_path, password=""):
             end_cell = ws.Cells(3 + num_rows - 1, num_cols)
             ws.Range(start_cell, end_cell).Value = data_values
 
-            # 2. Set New Formulas in Row 1
-            st.write("Setting VLOOKUP formulas...")
-            # CHCODE (AZ = column 52)
-            ws.Cells(1, 52).Value = "=VLOOKUP($E1,TEMPLATE_DB[[Account Num]:[Old I.C.]],2,0)"
-            # PLACEMENT (BJ = column 62)
-            ws.Cells(1, 62).Value = "=VLOOKUP($BA1,TEMPLATE_DB[[#All],[Account Num]:[Placement]],4,0)"
-            
             # 2. Formula Replication (AZ to BL)
             if num_rows > 0:
                 st.write("Replicating formulas from Row 1 for columns AZ:BL...")
                 last_data_row = 3 + num_rows - 1
                 
-                # Column AZ to BL (AZ is 52, BL is 64)
+                # Column AZ to BL
+                # AZ in Excel is 52, BL is 64
+                # User specified to replicate from Row 1
                 formula_range_source = ws.Range(ws.Cells(1, 52), ws.Cells(1, 64))
                 formula_range_dest = ws.Range(ws.Cells(3, 52), ws.Cells(last_data_row, 64))
                 
@@ -154,43 +149,115 @@ def process_template(df_cleaned, tmpl_path, output_path, password=""):
                 formula_range_source.Copy()
                 formula_range_dest.PasteSpecial(Paste=-4123) # xlPasteFormulas
                 excel.Application.CutCopyMode = False
-                
+
                 # Force calculation once formulas are in
                 st.write("Calculating formulas...")
                 ws.Calculate()
+
+                # --- TEMPLATE PHASE START ---
+                # This section handles all Excel-specific post-processing logic.
+                st.write("Entering TEMPLATE PHASE...")
+
+                last_row = last_data_row
                 
-                # 3. Batch Row Deletion (Focus: CH CODE / Column AZ)
-                st.write("Identifying rows to delete (Criteria: CH CODE is #N/A or blank)...")
+                # 1. Bulk Clearing (Memory-based for speed)
+                st.write("Processing columns BF, BG, BH (Clearing)...")
+                try:
+                    # BE=57 (ACTION), BF=58 (REACTION), BG=59 (AMT), BH=60 (WHEN)
+                    vals_be = ws.Range(f"BE3:BE{last_row}").Value
+                    vals_bf = list(ws.Range(f"BF3:BF{last_row}").Value)
+                    vals_bg = list(ws.Range(f"BG3:BG{last_row}").Value)
+                    vals_bh = list(ws.Range(f"BH3:BH{last_row}").Value)
+                    
+                    if not isinstance(vals_be, (list, tuple)): vals_be = [[vals_be]]
+                    vals_bf = [list(r) for r in vals_bf]
+                    vals_bg = [list(r) for r in vals_bg]
+                    vals_bh = [list(r) for r in vals_bh]
+                    
+                    cleared_bf = 0
+                    cleared_bg_bh = 0
+                    
+                    for i in range(len(vals_be)):
+                        be_val = str(vals_be[i][0]).strip().upper() if vals_be[i][0] is not None else ""
+                        bf_val = str(vals_bf[i][0]).strip().upper() if vals_bf[i][0] is not None else ""
+                        
+                        # Clear REACTION (BF) if '0' or '#N/A'
+                        if bf_val in ("0", "0.0", "#N/A") or vals_bf[i][0] == -2146826246:
+                            vals_bf[i][0] = ""
+                            cleared_bf += 1
+                            
+                        # Clear AMT/WHEN (BG/BH) if ACTION is not PTP
+                        if be_val != "PTP" and be_val != "":
+                            vals_bg[i][0] = ""
+                            vals_bh[i][0] = ""
+                            cleared_bg_bh += 1
+                            
+                    if cleared_bf > 0:
+                        ws.Range(f"BF3:BF{last_row}").Value = vals_bf
+                        st.write(f"Cleared {cleared_bf} cells in REACTION (BF)")
+                    
+                    if cleared_bg_bh > 0:
+                        ws.Range(f"BG3:BG{last_row}").Value = vals_bg
+                        ws.Range(f"BH3:BH{last_row}").Value = vals_bh
+                        st.write(f"Cleared 'AMT'/'WHEN' for {cleared_bg_bh} rows (Action not PTP)")
+                        
+                except Exception as e:
+                    st.warning(f"Clearing error: {e}")
+
+                # 2. Batch Row Deletion (Identify AZ=#N/A, BE=EXCLUDED, or BG=0)
+                st.write("Identifying rows to delete (Step 3 & Step 4 & BG=0)...")
                 delete_range = None
                 to_delete_count = 0
-                
+
+                # 1. Identify rows to delete from CH CODE (AZ) and ACTION (BE)
+                st.write("Identifying rows to delete (Step 3 & Step 4 EXCLUDED & AMT=0)...")
                 try:
-                    last_row = last_data_row
                     vals_az = ws.Range(f"AZ3:AZ{last_row}").Value
                     vals_be = ws.Range(f"BE3:BE{last_row}").Value
+                    vals_bg = ws.Range(f"BG3:BG{last_row}").Value
                     
+                    # Ensure we handle single-row returns (scalar/tuple)
                     if not isinstance(vals_az, (list, tuple)): vals_az = [[vals_az]]
                     if not isinstance(vals_be, (list, tuple)): vals_be = [[vals_be]]
+                    if not isinstance(vals_bg, (list, tuple)): vals_bg = [[vals_bg]]
                     
                     def is_error_or_na(v):
+                        """Checks if a value is an Excel #N/A error or string '#N/A'"""
                         if v == -2146826246: return True
                         v_str = str(v).strip().upper() if v is not None else ""
                         return v_str == "#N/A"
 
+                    def is_zero_amount(v):
+                        """Checks if a value is effectively zero, but not empty/None"""
+                        if v is None or v == "": return False
+                        try:
+                            return float(v) == 0
+                        except (ValueError, TypeError):
+                            v_str = str(v).strip()
+                            return v_str in ("0", "0.0")
+
                     for i in range(len(vals_az)):
                         az_val = vals_az[i][0]
                         be_val = vals_be[i][0]
+                        bg_val = vals_bg[i][0]
                         
-                        az_str = str(az_val).strip() if az_val is not None else ""
+                        # BE string for specific matches
                         be_str = str(be_val).strip().upper() if be_val is not None else ""
+                        az_str = str(az_val).strip() if az_val is not None else ""
                         
                         # Criteria 1: CH CODE (AZ) is #N/A or blank
                         match_az = is_error_or_na(az_val) or az_str == ""
                         
-                        # Criteria 2: ACTION (BE) is #N/A or EXCLUDED
-                        match_be = is_error_or_na(be_val) or be_str in ("EXCLUDED", "EXLUDED")
+                        # Criteria 2: ACTION (BE) is EXCLUDED or #N/A
+                        match_be_excluded = is_error_or_na(be_val) or be_str in ("EXCLUDED", "EXLUDED")
                         
-                        if match_az or match_be:
+                        # Criteria 3: AMT (BG) is 0 (Actual 0, not cleared blank)
+                        match_bg_zero = is_zero_amount(bg_val)
+                        
+                        # Criteria 4: ACTION (BE) is exactly "PTP"
+                        match_be_ptp = (be_str == "PTP")
+                        
+                        if (match_az or match_be_excluded or match_bg_zero or match_be_ptp) and be_str != "":
                             curr_row = ws.Rows(3 + i)
                             if delete_range is None:
                                 delete_range = curr_row
@@ -199,110 +266,131 @@ def process_template(df_cleaned, tmpl_path, output_path, password=""):
                             to_delete_count += 1
                     
                     if delete_range:
-                        st.write(f"Deleting {to_delete_count} rows based on AZ/BE criteria...")
+                        st.write(f"Deleting {to_delete_count} rows in batch...")
                         delete_range.Delete()
-                        st.success(f"Deleted {to_delete_count} rows with invalid CH CODE or EXCLUDED actions.")
-                    else:
-                        st.info("No rows found matching deletion criteria (AZ/BE).")
-                        
                 except Exception as e:
                     st.warning(f"Deletion logic error: {e}")
 
-                # 4. Clear REACTION (0/#N/A) and AMT/WHEN (Non-PTP)
-                st.write("Clearing REACTION (0/#N/A) and AMT/WHEN (Non-PTP)...")
+                # 2. Clear AMT/WHEN for remaining rows where Action != PTP
+                st.write("Clearing AMT/WHEN for non-PTP rows...")
                 try:
                     last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
                     if last_row >= 3:
                         vals_be = ws.Range(f"BE3:BE{last_row}").Value
-                        vals_bf = ws.Range(f"BF3:BF{last_row}").Value
-                        vals_bg = ws.Range(f"BG3:BG{last_row}").Value
-                        vals_bh = ws.Range(f"BH3:BH{last_row}").Value
+                        vals_bg = list(ws.Range(f"BG3:BG{last_row}").Value)
+                        vals_bh = list(ws.Range(f"BH3:BH{last_row}").Value)
                         
-                        if not isinstance(vals_be, (list, tuple)): vals_be = [[vals_be]]
-                        if not isinstance(vals_bf, (list, tuple)): vals_bf = [[vals_bf]]
-                        if not isinstance(vals_bg, (list, tuple)): vals_bg = [[vals_bg]]
-                        if not isinstance(vals_bh, (list, tuple)): vals_bh = [[vals_bh]]
-                        
-                        # Convert to mutable lists
-                        vals_bf = [list(r) for r in vals_bf]
+                        # Convert tuples to lists for mutability
                         vals_bg = [list(r) for r in vals_bg]
                         vals_bh = [list(r) for r in vals_bh]
                         
-                        cleared_bf_count = 0
-                        cleared_bg_bh_count = 0
-                        
-                        for i in range(len(vals_be)):
-                            be_str = str(vals_be[i][0]).strip().upper() if vals_be[i][0] is not None else ""
-                            bf_val = vals_bf[i][0]
-                            bf_str = str(bf_val).strip().upper() if bf_val is not None else ""
-                            
-                            # Clear REACTION (BF) if 0 or #N/A
-                            if bf_str in ("0", "0.0", "#N/A") or bf_val == -2146826246:
-                                vals_bf[i][0] = ""
-                                cleared_bf_count += 1
-                            
-                            # If ACTION doesn't start with PTP, clear AMT and WHEN
-                            if not be_str.startswith("PTP"):
+                        cleared_count = 0
+                        for i, row_val in enumerate(vals_be):
+                            val = row_val[0]
+                            val_str = str(val).strip().upper() if val is not None else ""
+                            # If it's not a PTP variant (starts with PTP), clear the cells.
+                            # This now includes blank actions (val_str == "") as requested.
+                            if not val_str.startswith("PTP"):
                                 vals_bg[i][0] = ""
                                 vals_bh[i][0] = ""
-                                cleared_bg_bh_count += 1
+                                cleared_count += 1
                         
-                        if cleared_bf_count > 0:
-                            ws.Range(f"BF3:BF{last_row}").Value = vals_bf
-                            st.write(f"Cleared 'REACTION' for {cleared_bf_count} rows.")
-                            
-                        if cleared_bg_bh_count > 0:
+                        if cleared_count > 0:
                             ws.Range(f"BG3:BG{last_row}").Value = vals_bg
                             ws.Range(f"BH3:BH{last_row}").Value = vals_bh
-                            st.write(f"Cleared 'AMT'/'WHEN' for {cleared_bg_bh_count} rows (Non-PTP).")
+                            st.write(f"Cleared 'AMT'/'WHEN' for {cleared_count} rows in bulk")
                 except Exception as e:
-                    st.warning(f"Clearing error: {e}")
+                    st.warning(f"Step 4 clearing error: {e}")
 
-                # 5. Batch Row Deletion (Focus: AMT = 0)
-                # Strictly done after clearing to avoid deleting cleared (blank) cells.
-                st.write("Identifying rows to delete (Criteria: AMT is exactly 0)...")
+                # 3. Process 'SYSTEM' in NOTES 1 (BC)
+                st.write("Updating 'Remark By' for SYSTEM notes...")
                 try:
                     last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
                     if last_row >= 3:
-                        vals_bg = ws.Range(f"BG3:BG{last_row}").Value
-                        if not isinstance(vals_bg, (list, tuple)): vals_bg = [[vals_bg]]
+                        # L=12 (Remark By), O=15 (Collector), BC=55 (NOTES 1)
+                        vals_l = ws.Range(f"L3:L{last_row}").Value
+                        vals_o = ws.Range(f"O3:O{last_row}").Value
+                        vals_bc = ws.Range(f"BC3:BC{last_row}").Value
                         
-                        delete_range_amt = None
-                        to_delete_amt_count = 0
+                        # Ensure we handle single-row returns
+                        if not isinstance(vals_l, (list, tuple)): vals_l = [[vals_l]]
+                        if not isinstance(vals_o, (list, tuple)): vals_o = [[vals_o]]
+                        if not isinstance(vals_bc, (list, tuple)): vals_bc = [[vals_bc]]
                         
-                        def is_zero_amount(v):
-                            if v is None or v == "": return False
-                            try:
-                                return float(v) == 0
-                            except (ValueError, TypeError):
-                                v_str = str(v).strip()
-                                return v_str in ("0", "0.0")
-
-                        for i in range(len(vals_bg)):
-                            bg_val = vals_bg[i][0]
-                            if is_zero_amount(bg_val):
-                                curr_row = ws.Rows(3 + i)
-                                if delete_range_amt is None:
-                                    delete_range_amt = curr_row
-                                else:
-                                    delete_range_amt = excel.Union(delete_range_amt, curr_row)
-                                to_delete_amt_count += 1
+                        # Convert to mutable list of lists
+                        vals_l = [list(r) for r in vals_l]
                         
-                        if delete_range_amt:
-                            st.write(f"Deleting {to_delete_amt_count} rows where AMT is 0...")
-                            delete_range_amt.Delete()
-                            st.success(f"Deleted {to_delete_amt_count} rows with AMT = 0.")
-                        else:
-                            st.info("No rows found with AMT = 0.")
+                        updated_count = 0
+                        for i in range(len(vals_bc)):
+                            bc_val = str(vals_bc[i][0]).upper() if vals_bc[i][0] is not None else ""
+                            if "SYSTEM" in bc_val:
+                                collector_val = vals_o[i][0]
+                                vals_l[i][0] = collector_val
+                                updated_count += 1
+                        
+                        if updated_count > 0:
+                            ws.Range(f"L3:L{last_row}").Value = vals_l
+                            st.write(f"Updated {updated_count} rows where NOTES 1 was 'SYSTEM'")
+                            # Force calculate to update formulas before baking
+                            ws.Calculate()
                 except Exception as e:
-                    st.warning(f"AMT=0 deletion error: {e}")
+                    st.warning(f"SYSTEM update error: {e}")
 
-                # --- REMAINING STEPS TEMPORARILY DISABLED ---
-                st.info("Remaining steps (SYSTEM update, Notes 2 truncation) are temporarily disabled.")
+                # 4. Truncate 'NOTES 2' (BD) to 250 characters and calculate length in BM
+                st.write("Truncating 'NOTES 2' and calculating character count in BM...")
+                try:
+                    # Set Header in BM2
+                    ws.Range("BM2").Value = "LENGTH"
+                    
+                    last_row = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
+                    if last_row >= 3:
+                        # BD=56 (NOTES 2), BM=65 (LENGTH)
+                        vals_bd = ws.Range(f"BD3:BD{last_row}").Value
+                        vals_bm = ws.Range(f"BM3:BM{last_row}").Value
+                        
+                        if not isinstance(vals_bd, (list, tuple)): vals_bd = [[vals_bd]]
+                        if not isinstance(vals_bm, (list, tuple)): vals_bm = [[vals_bm]]
+                        
+                        vals_bd_list = [list(r) for r in vals_bd]
+                        vals_bm_list = [list(r) for r in vals_bm]
+                        
+                        truncated_count = 0
+                        for i in range(len(vals_bd_list)):
+                            val = vals_bd_list[i][0]
+                            if val is not None:
+                                val_str = str(val)
+                                if len(val_str) > 250:
+                                    val_str = val_str[:250]
+                                    vals_bd_list[i][0] = val_str
+                                    truncated_count += 1
+                                # Update BM with the length of the (possibly truncated) text
+                                vals_bm_list[i][0] = len(val_str)
+                            else:
+                                vals_bm_list[i][0] = 0
+                        
+                        # Write both columns back
+                        ws.Range(f"BM3:BM{last_row}").Value = vals_bm_list
+                        if truncated_count > 0:
+                            ws.Range(f"BD3:BD{last_row}").Value = vals_bd_list
+                            st.write(f"Truncated {truncated_count} rows in 'NOTES 2' and updated character counts in BM")
+                        else:
+                            st.write("Updated character counts in BM")
+                except Exception as e:
+                    st.warning(f"NOTES 2 truncation/count error: {e}")
 
-            # --- PHASE 2 LOGIC REMOVED FOR STEP-BY-STEP REBUILD ---
-            st.info("Phase 2 logic (Formulas, AZ/BE Deletion, Clearing, and AMT=0 Deletion added!) is being rebuilt.")
-            
+                # --- TEMPLATE PHASE END ---
+
+                # --- FINAL BAKING (Last part before saving) ---
+                st.write("Baking final formulas into values...")
+                last_row_final = ws.Cells(ws.Rows.Count, "A").End(-4162).Row
+                if last_row_final >= 3:
+                    try:
+                        final_range = ws.Range(f"AZ3:BM{last_row_final}")
+                        final_range.Copy()
+                        final_range.PasteSpecial(Paste=-4163) # xlPasteValues
+                        excel.Application.CutCopyMode = False
+                    except Exception as e:
+                        st.warning(f"Final baking error: {e}")
 
             # Select A1 to unselect the range before saving
             try:

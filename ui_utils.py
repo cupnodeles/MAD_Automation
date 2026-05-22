@@ -125,6 +125,7 @@ def set_premium_style():
     # Custom dropdown navigation
     pages = {
         "Main Dashboard": "Main.py",
+        "Worklist Dashboard": "pages/Dashboard.py",
         "Daily Prod": "pages/1_Daily_Prod.py",
         "CE Clean": "pages/2_CE_Clean.py",
         "CE CALL": "pages/3_CE_CALL.py",

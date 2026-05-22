@@ -53,6 +53,11 @@ def main():
         total_removed = removed_status_rows + removed_remarkby_rows
         if total_removed > 0:
             st.success(f" Total rows removed: {total_removed} (from {total_rows_before} to {len(df)} rows)")
+            
+        # --- REMARK SANITIZATION ---
+        if 'Remark' in df.columns:
+            # Remove leading '=' to prevent Excel from treating remarks as formulas and showing #NAME?
+            df['Remark'] = df['Remark'].astype(str).str.lstrip('=')
         
         # --- DELETE LAST 2 COLUMNS ---
         if len(df.columns) > 2:

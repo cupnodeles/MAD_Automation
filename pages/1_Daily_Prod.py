@@ -173,23 +173,23 @@ def _build_data_batch(df_data, num_cols, start_row, is_bucket_mode, return_bucke
     # than building them one element at a time inside the row loop).
     r = row_indices  # shorthand
 
-    col_BB = [f'=XLOOKUP($BJ{ri},BPI!D:D,BPI!BR:BR,0)' for ri in r]
+    col_BB = [f'=VLOOKUP($BJ{ri},TEMPLATE_DB[[#All],[Account num]:[Collector]],3,0)' for ri in r]
     col_BC = [f'=$J{ri}' for ri in r]
-    col_BD = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[placement]],4,0)' for ri in r]
-    col_BE = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[endorsement date]],6,0)' for ri in r]
+    col_BD = [f'=VLOOKUP($BJ{ri},TEMPLATE_DB[[Account num]:[Placement]],4,0)' for ri in r]
+    col_BE = [f'=VLOOKUP($BJ{ri},TEMPLATE_DB[[#All],[Account num]:[Assign Date]],5,0)' for ri in r]
     col_BF = [f'=VLOOKUP($BD{ri},NOTES!H:J,3,0)' for ri in r]
     col_BG = [""] * nrows
     col_BH = ["MADRID"] * nrows
     col_BI = [""] * nrows
     col_BJ = [f'=$E{ri}' for ri in r]
     col_BK = [
-        f'=IF(LEFT($BC{ri},12)="LS VIA EMAIL", VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[email]],24,0), VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[email]],22,0))'
+        f'=IF(LEFT($BC{ri},12)="LS VIA EMAIL", VLOOKUP($BJ{ri},TEMPLATE_DB[[#All],[Account num]:[Last Called No.]],25,0), VLOOKUP($BJ{ri},TEMPLATE_DB[[#All],[Account num]:[Email]],25,0))'
         for ri in r
     ]
     col_BL = [f'=VLOOKUP($J{ri},NOTES!AA:AB,2,0)' for ri in r]
     col_BM = [""] * nrows
     col_BN = [
-        f'=IFERROR(VLOOKUP($L{ri},NOTES!V:W,2,0),VLOOKUP(\'VOLARE EXTRACTION\'!$BB{ri},NOTES!U:W,3,0))'
+        f'=IFERROR(VLOOKUP($BB{ri},NOTES!V:W,2,0),VLOOKUP(\'VOLARE EXTRACTION\'!$BB{ri},NOTES!U:W,3,0))'
         for ri in r
     ]
     col_BO = [f'=VLOOKUP($J{ri},NOTES!K:L,2,0)' for ri in r]
@@ -198,8 +198,8 @@ def _build_data_batch(df_data, num_cols, start_row, is_bucket_mode, return_bucke
     col_BR = [f'=$W{ri}' for ri in r]
     col_BS = [f'=$V{ri}' for ri in r]
     col_BT = [""] * nrows
-    col_BU = [f'=VLOOKUP($BJ{ri},BPI!D:P,12,0)' for ri in r]
-    col_BV = [f'=VLOOKUP($BJ{ri},db_bpi[[#All],[account number]:[prin]],13,0)' for ri in r]
+    col_BU = [f'=VLOOKUP($BJ{ri},TEMPLATE_DB[[Account num]:[new ob]],8,0)' for ri in r]
+    col_BV = [f'=VLOOKUP($BJ{ri},TEMPLATE_DB[[#All],[Account num]:[Principal]],9,0)' for ri in r]
     col_BW = [f'=VLOOKUP($BJ{ri},E{ri}:BA{ri},48,0)' for ri in r]
     col_BX = [f'=VLOOKUP($BJ{ri},E{ri}:BA{ri},49,0)' for ri in r]
     col_BY = [""] * nrows
@@ -832,7 +832,7 @@ def main():
 # ==========================================
 SAVE_PATH = r"C:\Users\SPM\Downloads\BPI\PL_Daily\MAY"
 PASSWORD = "MAD_2Q2026"
-NAMES_TO_REPLACE = ["Mendoza, Joshua"]
+NAMES_TO_REPLACE = ["Mendoza, Joshua", "Salcedo, Shaine"]
 
 MASTER_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\ONE PROD REPORT TEMPLATEv1.xlsm"
 CAMPAIGN_TEMPLATE = r"C:\Users\SPM\Downloads\BPI\Template\PL_2026{Month}{Day}_{Campaign}_Madrid.xlsx"
